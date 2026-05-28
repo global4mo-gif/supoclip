@@ -18,7 +18,7 @@ import { track } from "@/lib/datafast";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Film, Sparkles, Upload, Monitor, Menu, X, LogOut, List, Shield, Settings } from "lucide-react";
+import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Film, Sparkles, Upload, Monitor, Menu, X, LogOut, List, Shield, Settings, Music } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import LandingPage from "@/components/landing-page";
 import { isLandingOnlyModeEnabled } from "@/lib/app-flags";
@@ -118,6 +118,13 @@ export default function Home() {
   const [captionTemplate, setCaptionTemplate] = useState("default");
   const [availableTemplates, setAvailableTemplates] = useState<Array<{ id: string, name: string, description: string, animation: string, font_family?: string, font_size?: number, font_color?: string }>>([]);
   const [includeBroll, setIncludeBroll] = useState(false);
+
+  // Music states
+  const [backgroundMusicName, setBackgroundMusicName] = useState<string>("");
+  const [musicVolume, setMusicVolume] = useState(15);
+  const [availableMusic, setAvailableMusic] = useState<Array<{ name: string; display_name: string; format: string }>>([]);
+  const [isUploadingMusic, setIsUploadingMusic] = useState(false);
+  const musicUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [brollAvailable, setBrollAvailable] = useState(false);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("vertical");
   const [addSubtitles, setAddSubtitles] = useState(true);
@@ -362,6 +369,53 @@ export default function Home() {
     return font.display_name.toLowerCase().includes(keyword) || font.name.toLowerCase().includes(keyword);
   });
 
+  const refreshMusic = useCallback(async () => {
+    try {
+      const response = await fetch("/api/music", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json();
+      setAvailableMusic(data.music || []);
+    } catch {
+      // silently ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshMusic();
+  }, [refreshMusic]);
+
+  const handleMusicUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const ext = file.name.toLowerCase().split(".").pop() || "";
+    if (!["mp3", "wav", "m4a", "aac", "ogg", "flac"].includes(ext)) {
+      setError("Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC");
+      return;
+    }
+
+    try {
+      setIsUploadingMusic(true);
+      setError(null);
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/music/upload", { method: "POST", body: formData });
+      if (!response.ok) {
+        const parsed = await parseApiError(response, "Failed to upload music");
+        setError(formatSupportMessage(parsed));
+        return;
+      }
+      const data = await response.json();
+      if (data?.music?.name) setBackgroundMusicName(data.music.name);
+      await refreshMusic();
+    } catch {
+      setError("Failed to upload music. Please try again.");
+    } finally {
+      setIsUploadingMusic(false);
+    }
+  };
+
   const canUploadCustomFonts =
     !billingSummary?.monetization_enabled ||
     (isPaidBillingPlan(billingSummary.plan) && ["active", "trialing"].includes(billingSummary.subscription_status));
@@ -474,6 +528,8 @@ export default function Home() {
           pause_threshold_ms: normalizedPauseThreshold,
           remove_filler_words: removeFillerWords,
           filtered_words: normalizedFilteredWords,
+          background_music_name: backgroundMusicName || null,
+          music_volume: musicVolume,
         }),
       });
 
@@ -1058,6 +1114,64 @@ export default function Home() {
                         disabled={generationControlsDisabled}
                         placeholder="basically, literally, to be honest"
                       />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Background Music Section */}
+              <Card className="border-stone-200">
+                <CardContent className="px-4 pt-3 pb-3 space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-medium text-stone-900">
+                    <Music className="w-4 h-4" />
+                    Background Music
+                  </div>
+                  <div className="space-y-2">
+                    <select
+                      className="w-full text-sm border border-stone-200 rounded-md px-2 py-1.5 bg-white"
+                      value={backgroundMusicName}
+                      onChange={(e) => setBackgroundMusicName(e.target.value)}
+                      disabled={generationControlsDisabled}
+                    >
+                      <option value="">No music</option>
+                      {availableMusic.map((track) => (
+                        <option key={track.name} value={track.name}>
+                          {track.display_name}
+                        </option>
+                      ))}
+                    </select>
+                    {backgroundMusicName && (
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-stone-500">Volume: {musicVolume}%</label>
+                        <input
+                          type="range"
+                          min={1}
+                          max={50}
+                          value={musicVolume}
+                          onChange={(e) => setMusicVolume(Number(e.target.value))}
+                          disabled={generationControlsDisabled}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+                    <div>
+                      <input
+                        ref={musicUploadInputRef}
+                        type="file"
+                        accept=".mp3,.wav,.m4a,.aac,.ogg,.flac"
+                        className="hidden"
+                        onChange={handleMusicUpload}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-xs w-full"
+                        onClick={() => musicUploadInputRef.current?.click()}
+                        disabled={generationControlsDisabled || isUploadingMusic}
+                      >
+                        {isUploadingMusic ? "Uploading..." : "Upload music track"}
+                      </Button>
                     </div>
                   </div>
                 </CardContent>

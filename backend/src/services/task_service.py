@@ -152,6 +152,8 @@ class TaskService:
         should_cancel: Optional[Callable] = None,
         clip_ready_callback: Optional[Callable] = None,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -287,6 +289,8 @@ class TaskService:
                     output_format,
                     add_subtitles,
                     normalized_cleanup_settings,
+                    music_path,
+                    music_volume,
                 )
                 if clip_info is None:
                     continue  # Skip failed clip
@@ -519,6 +523,8 @@ class TaskService:
         include_broll: bool,
         apply_to_existing: bool,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> Dict[str, Any]:
         """Update task-level settings and optionally regenerate all clips."""
         await self.task_repo.update_task_settings(
@@ -539,6 +545,8 @@ class TaskService:
                 font_color,
                 caption_template,
                 cleanup_settings=cleanup_settings,
+                music_path=music_path,
+                music_volume=music_volume,
             )
 
         return await self.get_task_with_clips(task_id) or {}
@@ -551,6 +559,8 @@ class TaskService:
         font_color: str,
         caption_template: str,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> None:
         """Regenerate all clips in a task using existing segment boundaries."""
         task = await self.task_repo.get_task_by_id(self.db, task_id)
@@ -646,6 +656,8 @@ class TaskService:
             output_format,
             add_subtitles,
             normalized_cleanup_settings,
+            music_path,
+            music_volume,
         )
 
         await self.clip_repo.delete_clips_by_task(self.db, task_id)

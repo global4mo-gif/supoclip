@@ -141,6 +141,11 @@ export default function TaskPage() {
   const [projectPauseThresholdMs, setProjectPauseThresholdMs] = useState("900");
   const [projectRemoveFillerWords, setProjectRemoveFillerWords] = useState(false);
   const [projectFilteredWords, setProjectFilteredWords] = useState("");
+  const [projectMusicName, setProjectMusicName] = useState("");
+  const [projectMusicVolume, setProjectMusicVolume] = useState(15);
+  const [availableMusic, setAvailableMusic] = useState<Array<{ name: string; display_name: string }>>([]);
+  const [isUploadingMusic, setIsUploadingMusic] = useState(false);
+  const musicUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [isApplyingSettings, setIsApplyingSettings] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
   const [availableFonts, setAvailableFonts] = useState<FontOption[]>([]);
@@ -285,7 +290,49 @@ export default function TaskPage() {
       }
     };
     void loadTemplates();
+
+    const loadMusic = async () => {
+      try {
+        const response = await fetch("/api/music", { cache: "no-store" });
+        if (response.ok) {
+          const data = await response.json();
+          setAvailableMusic(data.music || []);
+        }
+      } catch {
+        // silently ignore
+      }
+    };
+    void loadMusic();
   }, [apiUrl]);
+
+  const handleMusicUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const ext = file.name.toLowerCase().split(".").pop() || "";
+    if (!["mp3", "wav", "m4a", "aac", "ogg", "flac"].includes(ext)) {
+      alert("Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC");
+      return;
+    }
+    try {
+      setIsUploadingMusic(true);
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/music/upload", { method: "POST", body: formData });
+      if (!response.ok) {
+        alert(await buildSupportError(response, "Failed to upload music"));
+        return;
+      }
+      const data = await response.json();
+      if (data?.music?.name) setProjectMusicName(data.music.name);
+      const refreshed = await fetch("/api/music", { cache: "no-store" });
+      if (refreshed.ok) setAvailableMusic((await refreshed.json()).music || []);
+    } catch {
+      alert("Failed to upload music. Please try again.");
+    } finally {
+      setIsUploadingMusic(false);
+    }
+  };
 
   // SSE effect - real-time progress updates
   useEffect(() => {
@@ -587,6 +634,8 @@ export default function TaskPage() {
           remove_filler_words: projectRemoveFillerWords,
           filtered_words: normalizedFilteredWords,
           apply_to_existing: true,
+          background_music_name: projectMusicName || null,
+          music_volume: projectMusicVolume,
         }),
       });
       if (!response.ok) {
@@ -1132,6 +1181,50 @@ export default function TaskPage() {
                         onChange={(e) => setProjectFilteredWords(e.target.value)}
                         placeholder="basically, literally, to be honest"
                       />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-gray-500">Background Music</label>
+                    <select
+                      className="w-full text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white"
+                      value={projectMusicName}
+                      onChange={(e) => setProjectMusicName(e.target.value)}
+                    >
+                      <option value="">No music</option>
+                      {availableMusic.map((track) => (
+                        <option key={track.name} value={track.name}>{track.display_name}</option>
+                      ))}
+                    </select>
+                    {projectMusicName && (
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-500">Volume: {projectMusicVolume}%</label>
+                        <input
+                          type="range"
+                          min={1}
+                          max={50}
+                          value={projectMusicVolume}
+                          onChange={(e) => setProjectMusicVolume(Number(e.target.value))}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+                    <div>
+                      <input
+                        ref={musicUploadInputRef}
+                        type="file"
+                        accept=".mp3,.wav,.m4a,.aac,.ogg,.flac"
+                        className="hidden"
+                        onChange={handleMusicUpload}
+                      />
+                      <button
+                        type="button"
+                        className="text-xs text-blue-600 hover:underline"
+                        onClick={() => musicUploadInputRef.current?.click()}
+                        disabled={isUploadingMusic}
+                      >
+                        {isUploadingMusic ? "Uploading..." : "+ Upload music track"}
+                      </button>
                     </div>
                   </div>
                 </div>

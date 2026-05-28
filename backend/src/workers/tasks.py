@@ -27,6 +27,8 @@ async def process_video_task(
     output_format: str = "vertical",
     add_subtitles: bool = True,
     cleanup_settings: Dict[str, Any] | None = None,
+    music_path_str: str | None = None,
+    music_volume: float = 0.15,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -76,6 +78,9 @@ async def process_video_task(
             ):
                 await progress.clip_ready(clip_index, total_clips, clip_data)
 
+            from pathlib import Path as _Path
+            music_path = _Path(music_path_str) if music_path_str else None
+
             # Process the video
             result = await task_service.process_task(
                 task_id=task_id,
@@ -92,6 +97,8 @@ async def process_video_task(
                 should_cancel=should_cancel,
                 clip_ready_callback=clip_ready_callback,
                 cleanup_settings=cleanup_settings,
+                music_path=music_path,
+                music_volume=music_volume,
             )
 
             logger.info(f"Task {task_id} completed successfully")

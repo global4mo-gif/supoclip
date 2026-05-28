@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import os
 
 import cv2
 
@@ -38,6 +39,8 @@ VALID_OUTPUT_FORMATS = {"vertical", "vertical_pan", "vertical_split", "original"
 CLIP_END_SENTENCE_EXTENSION_SECONDS = 3.0
 CLIP_END_PADDING_SECONDS = 0.35
 SENTENCE_END_RE = re.compile(r"""[.!?]["')\]}]*$""")
+FFMPEG_BINARY = os.getenv("FFMPEG_BINARY", "ffmpeg")
+FFPROBE_BINARY = os.getenv("FFPROBE_BINARY", "ffprobe")
 
 
 class VideoProcessor:
@@ -101,7 +104,7 @@ def _prepare_audio_for_transcription(video_path: Path) -> Path:
         return audio_path
 
     command = [
-        "ffmpeg",
+        FFMPEG_BINARY,
         "-y",
         "-i",
         str(video_path),
@@ -187,16 +190,17 @@ def get_video_transcript(video_path: Path, speech_model: str = "best") -> str:
     aai.settings.http_timeout = runtime_config.assembly_ai_http_timeout_seconds
     transcriber = aai.Transcriber()
 
-    # Request word-level timestamps for precise subtitle sync
-    speech_model_value = aai.SpeechModel.best
+    # AssemblyAI deprecated the singular speech_model parameter. Use the
+    # current ordered fallback list so older fast-mode values keep working.
+    speech_models = ["universal-3-pro", "universal-2"]
     if speech_model == "nano":
-        speech_model_value = aai.SpeechModel.nano
+        speech_models = ["universal-2"]
 
     config_obj = aai.TranscriptionConfig(
         speaker_labels=True,
         punctuate=True,
         format_text=True,
-        speech_model=speech_model_value,
+        speech_models=speech_models,
     )
 
     try:
@@ -556,6 +560,9 @@ def detect_faces_in_clip(
         haar_cascade = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
+        profile_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_profileface.xml"
+        )
 
         # Try to load DNN face detector (more accurate than Haar)
         dnn_net = None
@@ -664,12 +671,13 @@ def detect_faces_in_clip(
                             f"DNN detection failed for frame at {sample_time}s: {e}"
                         )
 
-                # If still no faces found, use Haar cascade
+                # If still no faces found, use Haar cascade. Profile faces are
+                # common in podcast/interview shots, so check both directions.
                 if not detected_faces:
                     try:
                         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
 
-                        faces = haar_cascade.detectMultiScale(
+                        faces = list(haar_cascade.detectMultiScale(
                             gray,
                             scaleFactor=1.05,  # More sensitive
                             minNeighbors=3,  # Less strict
@@ -678,7 +686,28 @@ def detect_faces_in_clip(
                                 int(width * 0.7),
                                 int(height * 0.7),
                             ),  # Maximum size limit
-                        )
+                        ))
+
+                        if not profile_cascade.empty():
+                            profile_faces = profile_cascade.detectMultiScale(
+                                gray,
+                                scaleFactor=1.05,
+                                minNeighbors=3,
+                                minSize=(40, 40),
+                                maxSize=(int(width * 0.7), int(height * 0.7)),
+                            )
+                            faces.extend(profile_faces)
+
+                            flipped_gray = cv2.flip(gray, 1)
+                            mirrored_faces = profile_cascade.detectMultiScale(
+                                flipped_gray,
+                                scaleFactor=1.05,
+                                minNeighbors=3,
+                                minSize=(40, 40),
+                                maxSize=(int(width * 0.7), int(height * 0.7)),
+                            )
+                            for x, y, w, h in mirrored_faces:
+                                faces.append((width - x - w, y, w, h))
 
                         for x, y, w, h in faces:
                             # Estimate confidence based on face size and position
@@ -786,7 +815,7 @@ def run_ffmpeg_command(command: List[str], timeout: int = 900) -> subprocess.Com
 def ffprobe_has_audio(video_path: Path) -> bool:
     result = run_ffmpeg_command(
         [
-            "ffprobe",
+            FFPROBE_BINARY,
             "-v",
             "error",
             "-select_streams",
@@ -805,7 +834,7 @@ def ffprobe_has_audio(video_path: Path) -> bool:
 def ffprobe_video_size(video_path: Path) -> Tuple[int, int]:
     result = run_ffmpeg_command(
         [
-            "ffprobe",
+            FFPROBE_BINARY,
             "-v",
             "error",
             "-select_streams",
@@ -827,7 +856,7 @@ def ffprobe_video_size(video_path: Path) -> Tuple[int, int]:
 def ffprobe_duration(video_path: Path) -> float:
     result = run_ffmpeg_command(
         [
-            "ffprobe",
+            FFPROBE_BINARY,
             "-v",
             "error",
             "-show_entries",
@@ -881,7 +910,7 @@ def render_source_ranges_ffmpeg(
     if len(keep_ranges) == 1:
         start, end = keep_ranges[0]
         command = [
-            "ffmpeg",
+            FFMPEG_BINARY,
             "-y",
             "-ss",
             f"{start:.3f}",
@@ -933,7 +962,7 @@ def render_source_ranges_ffmpeg(
         map_args = ["-map", "[v]"]
 
     command = [
-        "ffmpeg",
+        FFMPEG_BINARY,
         "-y",
         "-i",
         str(video_path),
@@ -1126,6 +1155,7 @@ def build_assemblyai_ass_subtitles(
     font_px = get_scaled_font_size(effective_font_size, video_width)
     outline_px = int(template.get("stroke_width", 2) or 0)
     shadow_px = 2 if template.get("shadow") else 0
+    bold_val = 1 if template.get("bold", True) else 0
     pos_y = float(template.get("position_y", 0.75))
     y_pos = int(video_height * pos_y)
     font_name = ass_font_name(effective_font_family)
@@ -1140,7 +1170,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_px},{primary},&H000000FF,{outline},{back_color},1,0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},5,60,60,60,1
+Style: Default,{font_name},{font_px},{primary},&H000000FF,{outline},{back_color},{bold_val},0,0,0,100,100,0,0,{border_style},{outline_px},{shadow_px},2,60,60,60,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1196,7 +1226,7 @@ def count_scene_cuts(video_path: Path, threshold: float = 0.35) -> int:
     """Count likely scene cuts in a clip using ffmpeg's scene score."""
     result = run_ffmpeg_command(
         [
-            "ffmpeg",
+            FFMPEG_BINARY,
             "-i",
             str(video_path),
             "-filter:v",
@@ -1373,7 +1403,7 @@ def detect_speaker_reframe_plan(
             return None
 
         scene_cuts = count_scene_cuts(clip_path)
-        if scene_cuts > 2:
+        if scene_cuts > 12:
             logger.info("Skipping speaker reframe: %d scene cuts detected", scene_cuts)
             return None
 
@@ -1419,7 +1449,7 @@ def detect_speaker_reframe_plan(
             )
             result = run_ffmpeg_command(
                 [
-                    "ffmpeg",
+                    FFMPEG_BINARY,
                     "-y",
                     "-i",
                     str(clip_path),
@@ -1486,9 +1516,12 @@ def render_reframed_clip_ffmpeg(
         shutil.copyfile(input_path, output_path)
         return True, round_to_even(width), round_to_even(height)
 
+    # Use speaker-aware reframing for the default portrait export too. The UI
+    # usually sends "vertical", so limiting this to the explicit pan mode leaves
+    # interview clips centered between speakers instead of on the active face.
     plan = (
         detect_speaker_reframe_plan(input_path, output_format)
-        if output_format in {"vertical_pan", "vertical_split"}
+        if output_format in {"vertical", "vertical_pan", "vertical_split"}
         else None
     )
     if plan and plan["mode"] == "pan":
@@ -1508,7 +1541,7 @@ def render_reframed_clip_ffmpeg(
             "[lv][rv]vstack,setsar=1[v]"
         )
         command = [
-            "ffmpeg",
+            FFMPEG_BINARY,
             "-y",
             "-i",
             str(input_path),
@@ -1539,7 +1572,7 @@ def render_reframed_clip_ffmpeg(
         video_filter = build_static_vertical_filter(input_path, width, height)
 
     command = [
-        "ffmpeg",
+        FFMPEG_BINARY,
         "-y",
         "-i",
         str(input_path),
@@ -1564,6 +1597,36 @@ def render_reframed_clip_ffmpeg(
     return run_ffmpeg_command(command).returncode == 0, 1080, 1920
 
 
+def mix_background_music_ffmpeg(
+    input_path: Path,
+    music_path: Path,
+    output_path: Path,
+    music_volume: float = 0.15,
+) -> bool:
+    """Mix background music into a video clip. Music is looped and ducked under the original audio."""
+    music_volume = max(0.0, min(1.0, music_volume))
+    command = [
+        FFMPEG_BINARY,
+        "-y",
+        "-i", str(input_path),
+        "-stream_loop", "-1",
+        "-i", str(music_path),
+        "-filter_complex",
+        f"[1:a]volume={music_volume:.3f}[bg];[0:a][bg]amix=inputs=2:duration=first:weights=1 1[aout]",
+        "-map", "0:v",
+        "-map", "[aout]",
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+    result = run_ffmpeg_command(command)
+    if result.returncode != 0:
+        logger.error("Music mix failed: %s", result.stderr[-500:] if result.stderr else "")
+    return result.returncode == 0
+
+
 def burn_ass_subtitles_ffmpeg(
     input_path: Path,
     ass_path: Path,
@@ -1576,7 +1639,7 @@ def burn_ass_subtitles_ffmpeg(
     video_filter = f"{subtitles_filter},setsar=1"
 
     command = [
-        "ffmpeg",
+        FFMPEG_BINARY,
         "-y",
         "-i",
         str(input_path),
@@ -1671,7 +1734,7 @@ def detect_audio_peak_times(video_path: Path, max_peaks: int = 8) -> List[float]
     """Find approximate one-second audio energy peaks with ffmpeg astats."""
     result = run_ffmpeg_command(
         [
-            "ffmpeg",
+            FFMPEG_BINARY,
             "-i",
             str(video_path),
             "-vn",
@@ -2048,6 +2111,8 @@ def create_optimized_clip(
     caption_template: str = "default",
     output_format: str = "vertical",
     keep_ranges: Optional[List[Tuple[float, float]]] = None,
+    music_path: Optional[Path] = None,
+    music_volume: float = 0.15,
 ) -> bool:
     """Create clip with optional subtitles. output_format: 'vertical' (9:16) or 'original' (keep source size)."""
     try:
@@ -2079,7 +2144,7 @@ def create_optimized_clip(
             fast_path_start, fast_path_end = effective_keep_ranges[0]
             result = subprocess.run(
                 [
-                    "ffmpeg",
+                    FFMPEG_BINARY,
                     "-y",
                     "-ss", str(fast_path_start),
                     "-i", str(video_path),
@@ -2144,10 +2209,26 @@ def create_optimized_clip(
                         font_family or get_template(caption_template)["font_family"]
                     ),
                 ):
-                    raise RuntimeError("ffmpeg subtitle burn failed")
-                shutil.move(str(subtitled_clip_path), str(output_path))
+                    logger.warning(
+                        "ffmpeg subtitle burn failed; saving clip without subtitles"
+                    )
+                    pre_music_path = framed_clip_path
+                else:
+                    pre_music_path = subtitled_clip_path
             else:
-                shutil.move(str(framed_clip_path), str(output_path))
+                pre_music_path = framed_clip_path
+
+            if music_path and music_path.exists():
+                music_mixed_path = temp_root / "music_mixed.mp4"
+                if mix_background_music_ffmpeg(
+                    pre_music_path, music_path, music_mixed_path, music_volume
+                ):
+                    shutil.move(str(music_mixed_path), str(output_path))
+                else:
+                    logger.warning("Music mix failed; saving clip without music")
+                    shutil.move(str(pre_music_path), str(output_path))
+            else:
+                shutil.move(str(pre_music_path), str(output_path))
 
             logger.info(f"Successfully created clip with ffmpeg: {output_path}")
             return True
@@ -2168,6 +2249,8 @@ def create_clips_from_segments(
     output_format: str = "vertical",
     add_subtitles: bool = True,
     cleanup_settings: Optional[Dict[str, Any]] = None,
+    music_path: Optional[Path] = None,
+    music_volume: float = 0.15,
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments with template support."""
     logger.info(
@@ -2239,6 +2322,8 @@ def create_clips_from_segments(
                 caption_template,
                 output_format,
                 keep_ranges,
+                music_path,
+                music_volume,
             )
 
             if success:
@@ -2333,7 +2418,7 @@ def apply_transition_effect(
             video_label = "[vintro]"
 
         command = [
-            "ffmpeg",
+            FFMPEG_BINARY,
             "-y",
             "-i",
             str(clip1_path),
@@ -2390,6 +2475,8 @@ def create_clips_with_transitions(
     output_format: str = "vertical",
     add_subtitles: bool = True,
     cleanup_settings: Optional[Dict[str, Any]] = None,
+    music_path: Optional[Path] = None,
+    music_volume: float = 0.15,
 ) -> List[Dict[str, Any]]:
     """Create standalone video clips without inter-clip transitions.
 
@@ -2412,6 +2499,8 @@ def create_clips_with_transitions(
         output_format,
         add_subtitles,
         cleanup_settings,
+        music_path,
+        music_volume,
     )
 
 
@@ -2521,7 +2610,7 @@ def insert_broll_into_clip(
             video_label = concat_labels[0]
 
         command = [
-            "ffmpeg",
+            FFMPEG_BINARY,
             "-y",
             "-i",
             str(main_clip_path),

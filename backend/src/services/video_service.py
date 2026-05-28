@@ -139,6 +139,8 @@ class VideoService:
         output_format: str = "vertical",
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> List[Dict[str, Any]]:
         """
         Create standalone video clips from segments with optional subtitles.
@@ -162,6 +164,8 @@ class VideoService:
             output_format,
             add_subtitles,
             cleanup_settings,
+            music_path,
+            music_volume,
         )
 
         logger.info(f"Successfully created {len(clips_info)} clips")
@@ -180,6 +184,8 @@ class VideoService:
         output_format: str = "vertical",
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure."""
         try:
@@ -240,6 +246,8 @@ class VideoService:
                 caption_template,
                 output_format,
                 keep_ranges,
+                music_path,
+                music_volume,
             )
 
             if not success:

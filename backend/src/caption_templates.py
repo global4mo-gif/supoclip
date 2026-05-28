@@ -21,6 +21,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "background_color": None,
         "animation": "none",
         "shadow": False,
+        "bold": True,
         "position_y": 0.75,  # 75% down the video
     },
     "hormozi": {
@@ -36,6 +37,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "background_color": "#000000AA",  # Semi-transparent black
         "animation": "karaoke",
         "shadow": True,
+        "bold": True,
         "position_y": 0.75,
     },
     "mrbeast": {
@@ -51,6 +53,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "background_color": None,
         "animation": "pop",
         "shadow": True,
+        "bold": True,
         "position_y": 0.70,  # Slightly higher
     },
     "minimal": {
@@ -66,6 +69,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "background_color": "#00000080",  # 50% transparent black
         "animation": "fade",
         "shadow": False,
+        "bold": False,
         "position_y": 0.80,
     },
     "tiktok": {
@@ -81,6 +85,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "background_color": None,
         "animation": "karaoke",
         "shadow": True,
+        "bold": False,
         "position_y": 0.75,
     },
     "neon": {
@@ -96,6 +101,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "background_color": None,
         "animation": "karaoke",
         "shadow": True,
+        "bold": True,
         "position_y": 0.75,
     },
     "podcast": {
@@ -111,6 +117,7 @@ CAPTION_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "background_color": "#1A1A1ACC",  # Dark semi-transparent
         "animation": "fade",
         "shadow": False,
+        "bold": False,
         "position_y": 0.78,
     },
 }

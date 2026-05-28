@@ -22,6 +22,7 @@ from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import get_config
 from ...font_registry import is_font_accessible
+from ...music_registry import find_music_path, is_music_accessible
 from ...clip_cleanup import normalize_clip_cleanup_settings
 from ...video_utils import VALID_OUTPUT_FORMATS
 from ...admin_auth import require_admin_user
@@ -202,6 +203,12 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         data.get("remove_filler_words"),
         data.get("filtered_words"),
     )
+    background_music_name = data.get("background_music_name") or None
+    music_volume_raw = data.get("music_volume", 15)
+    try:
+        music_volume = max(0.0, min(1.0, float(music_volume_raw) / 100.0))
+    except (TypeError, ValueError):
+        music_volume = 0.15
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
 
@@ -210,6 +217,15 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         await billing_service.assert_can_create_task(user_id)
 
         task_service = TaskService(db)
+
+        if background_music_name and not is_music_accessible(background_music_name, user_id):
+            raise HTTPException(status_code=400, detail="Selected music track is not available")
+
+        music_path = (
+            find_music_path(background_music_name, user_id=user_id, allow_all_user_music=True)
+            if background_music_name
+            else None
+        )
 
         # Create task
         task_id = await task_service.create_task_with_source(
@@ -246,6 +262,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             output_format,
             add_subtitles,
             cleanup_settings,
+            str(music_path) if music_path else None,
+            music_volume,
         )
 
         # Save source metadata for resume/retries in environments without sources.url column
@@ -705,6 +723,12 @@ async def apply_task_settings(
             payload.get("filtered_words"),
         )
 
+        background_music_name = payload.get("background_music_name") or None
+        try:
+            music_volume = max(0.0, min(1.0, float(payload.get("music_volume", 15)) / 100.0))
+        except (TypeError, ValueError):
+            music_volume = 0.15
+
         task_service = TaskService(db)
         await _require_task_owner(request, task_service, db, task_id)
         task_record = await task_service.task_repo.get_task_by_id(db, task_id)
@@ -714,6 +738,15 @@ async def apply_task_settings(
             raise HTTPException(
                 status_code=400, detail="Selected font is not available"
             )
+        if background_music_name and not is_music_accessible(background_music_name, task_record["user_id"]):
+            raise HTTPException(status_code=400, detail="Selected music track is not available")
+
+        music_path = (
+            find_music_path(background_music_name, user_id=task_record["user_id"], allow_all_user_music=True)
+            if background_music_name
+            else None
+        )
+
         task = await task_service.update_task_settings(
             task_id,
             font_family,
@@ -723,6 +756,8 @@ async def apply_task_settings(
             include_broll,
             apply_to_existing,
             cleanup_settings,
+            music_path,
+            music_volume,
         )
         metadata = await _load_task_source_metadata(task_id)
         await _save_task_source_metadata(
