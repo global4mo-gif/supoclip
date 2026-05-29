@@ -155,6 +155,8 @@ class TaskService:
         music_path: Optional[Path] = None,
         music_volume: float = 0.15,
         target_clip_count: int = 5,
+        min_clip_seconds: int = 15,
+        max_clip_seconds: int = 60,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -223,6 +225,8 @@ class TaskService:
                 progress_callback=update_progress,
                 should_cancel=should_cancel,
                 target_clip_count=target_clip_count,
+                min_clip_seconds=min_clip_seconds,
+                max_clip_seconds=max_clip_seconds,
             )
             stage_timings["pipeline_seconds"] = round(
                 perf_counter() - pipeline_start, 3

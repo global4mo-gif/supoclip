@@ -119,8 +119,9 @@ export default function Home() {
   const [availableTemplates, setAvailableTemplates] = useState<Array<{ id: string, name: string, description: string, animation: string, font_family?: string, font_size?: number, font_color?: string }>>([]);
   const [includeBroll, setIncludeBroll] = useState(false);
 
-  // Clip count
+  // Clip count & duration
   const [targetClipCount, setTargetClipCount] = useState(10);
+  const [clipDurationPreset, setClipDurationPreset] = useState("medium");
 
   // Music states
   const [backgroundMusicName, setBackgroundMusicName] = useState<string>("");
@@ -534,6 +535,7 @@ export default function Home() {
           background_music_name: backgroundMusicName || null,
           music_volume: musicVolume,
           target_clip_count: targetClipCount,
+          clip_duration_preset: clipDurationPreset,
         }),
       });
 
@@ -999,6 +1001,34 @@ export default function Home() {
                       <span className="text-sm font-semibold text-stone-900 w-8 text-center">{targetClipCount}</span>
                     </div>
                     <p className="text-xs text-stone-500">AI will find up to {targetClipCount} viral moment{targetClipCount !== 1 ? "s" : ""}. For long videos (1h+) set 15–25.</p>
+                  </div>
+
+                  {/* Clip Duration Preset */}
+                  <div className="space-y-2">
+                    <label className="text-sm text-stone-600">Clip duration</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { id: "short",    label: "Short",    sub: "up to 30s" },
+                        { id: "medium",   label: "Medium",   sub: "30–60s" },
+                        { id: "long",     label: "Long",     sub: "60–90s" },
+                        { id: "extended", label: "Extended", sub: "90s+" },
+                      ].map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          disabled={generationControlsDisabled}
+                          onClick={() => setClipDurationPreset(p.id)}
+                          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                            clipDurationPreset === p.id
+                              ? "border-stone-900 bg-stone-900 text-white"
+                              : "border-stone-200 bg-white text-stone-700 hover:border-stone-400"
+                          }`}
+                        >
+                          <div className="text-sm font-medium">{p.label}</div>
+                          <div className={`text-xs ${clipDurationPreset === p.id ? "text-stone-300" : "text-stone-500"}`}>{p.sub}</div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {/* Caption Template Selector */}

@@ -405,6 +405,8 @@ def build_transcript_analysis_prompt(
     include_broll: bool = False,
     clip_signals: str | None = None,
     target_clip_count: int = 5,
+    min_clip_seconds: int = 15,
+    max_clip_seconds: int = 60,
 ) -> str:
     """Build the grounded task prompt for transcript analysis."""
     broll_instruction = ""
@@ -447,9 +449,10 @@ Follow this workflow:
 
 Selection target:
 - {count_instruction}
-- Most selected clips should be 25-50 seconds.
-- Only choose a 15-24 second clip when it already contains a full setup and payoff.
-- If a strong moment is shorter than 25 seconds, first try expanding to nearby contiguous transcript lines that add useful context.
+- Each clip MUST be between {min_clip_seconds} and {max_clip_seconds} seconds long. Strictly respect these bounds.
+- Ideal clip length is {min_clip_seconds + (max_clip_seconds - min_clip_seconds) // 3}–{max_clip_seconds - (max_clip_seconds - min_clip_seconds) // 4} seconds.
+- If a moment is shorter than {min_clip_seconds}s, expand to nearby contiguous lines to reach the minimum.
+- If a moment is longer than {max_clip_seconds}s, trim to the strongest self-contained portion within the limit.
 - Skip weak standalone picks: intros, sponsor reads, CTAs, contextless quotes, repeated points, vague setup, and answer fragments that require prior context.
 - Before returning a segment, ask whether a viewer would understand and care without seeing the rest of the source video.
 
@@ -469,7 +472,7 @@ JSON-only output requirements:
 - Top-level keys: "most_relevant_segments", "summary", "key_topics"{', "broll_opportunities"' if include_broll else ''}.
 - Segment keys: "start_time", "end_time", "text", "relevance_score", "reasoning", "virality".
 - Virality keys: "hook_score", "engagement_score", "value_score", "shareability_score", "total_score", "hook_type", "virality_reasoning".
-- Do not return segments shorter than {MIN_ACCEPTED_CLIP_SECONDS} seconds or longer than {MAX_ACCEPTED_CLIP_SECONDS} seconds.
+- Do not return segments shorter than {min_clip_seconds} seconds or longer than {max_clip_seconds} seconds.
 
 Transcript:
 {transcript}"""
@@ -629,6 +632,8 @@ async def get_most_relevant_parts_by_transcript(
     include_broll: bool = False,
     clip_signals: str | None = None,
     target_clip_count: int = 5,
+    min_clip_seconds: int = 15,
+    max_clip_seconds: int = 60,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript with virality scoring and optional B-roll detection."""
     logger.info(
@@ -638,12 +643,17 @@ async def get_most_relevant_parts_by_transcript(
     try:
         agent = get_transcript_agent()
 
+        eff_min = max(5, min_clip_seconds)
+        eff_max = max(eff_min + 5, max_clip_seconds)
+
         result = await agent.run(
             build_transcript_analysis_prompt(
                 transcript=transcript,
                 include_broll=include_broll,
                 clip_signals=clip_signals,
                 target_clip_count=target_clip_count,
+                min_clip_seconds=eff_min,
+                max_clip_seconds=eff_max,
             )
         )
 
@@ -679,7 +689,7 @@ async def get_most_relevant_parts_by_transcript(
 
                 duration = end_seconds - start_seconds
 
-                if duration < MIN_ACCEPTED_CLIP_SECONDS or duration > MAX_ACCEPTED_CLIP_SECONDS:
+                if duration < eff_min or duration > eff_max:
                     repaired_bounds = _repair_segment_bounds(
                         segment,
                         transcript_spans,
@@ -696,15 +706,15 @@ async def get_most_relevant_parts_by_transcript(
                     )
                     continue
 
-                if duration < MIN_ACCEPTED_CLIP_SECONDS:
+                if duration < eff_min:
                     logger.warning(
-                        f"Skipping segment too short: {duration}s (min {MIN_ACCEPTED_CLIP_SECONDS}s required)"
+                        f"Skipping segment too short: {duration}s (min {eff_min}s required)"
                     )
                     continue
 
-                if duration > MAX_ACCEPTED_CLIP_SECONDS:
+                if duration > eff_max:
                     logger.warning(
-                        f"Skipping segment too long: {duration}s (max {MAX_ACCEPTED_CLIP_SECONDS}s allowed)"
+                        f"Skipping segment too long: {duration}s (max {eff_max}s allowed)"
                     )
                     continue
 

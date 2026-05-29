@@ -30,6 +30,8 @@ async def process_video_task(
     music_path_str: str | None = None,
     music_volume: float = 0.15,
     target_clip_count: int = 5,
+    min_clip_seconds: int = 15,
+    max_clip_seconds: int = 60,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -101,6 +103,8 @@ async def process_video_task(
                 music_path=music_path,
                 music_volume=music_volume,
                 target_clip_count=target_clip_count,
+                min_clip_seconds=min_clip_seconds,
+                max_clip_seconds=max_clip_seconds,
             )
 
             logger.info(f"Task {task_id} completed successfully")

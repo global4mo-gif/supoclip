@@ -113,6 +113,7 @@ def _merge_task_source_metadata(
     add_subtitles: Any = None,
     cleanup_settings: Dict[str, Any] | None = None,
     target_clip_count: int | None = None,
+    clip_duration_preset: str | None = None,
 ) -> Dict[str, Any]:
     merged = dict(existing or {})
 
@@ -128,6 +129,8 @@ def _merge_task_source_metadata(
         merged.update(cleanup_settings)
     if target_clip_count is not None:
         merged["target_clip_count"] = target_clip_count
+    if clip_duration_preset is not None:
+        merged["clip_duration_preset"] = clip_duration_preset
 
     return merged
 
@@ -216,8 +219,15 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         target_clip_count = max(1, min(30, int(data.get("target_clip_count", 5))))
     except (TypeError, ValueError):
         target_clip_count = 5
-    except (TypeError, ValueError):
-        music_volume = 0.15
+
+    _DURATION_PRESETS = {
+        "short":    (15, 30),
+        "medium":   (30, 60),
+        "long":     (60, 90),
+        "extended": (90, 180),
+    }
+    preset = data.get("clip_duration_preset", "medium")
+    min_clip_seconds, max_clip_seconds = _DURATION_PRESETS.get(preset, (30, 60))
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
 
@@ -274,6 +284,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             str(music_path) if music_path else None,
             music_volume,
             target_clip_count,
+            min_clip_seconds,
+            max_clip_seconds,
         )
 
         # Save source metadata for resume/retries in environments without sources.url column
@@ -287,6 +299,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 add_subtitles=add_subtitles,
                 cleanup_settings=cleanup_settings,
                 target_clip_count=target_clip_count,
+                clip_duration_preset=preset,
             ),
         )
 
@@ -1021,6 +1034,8 @@ async def resume_task(
         )
 
         resume_target_clip_count = max(1, min(30, int(metadata.get("target_clip_count", 5))))
+        _DURATION_PRESETS_RESUME = {"short": (15, 30), "medium": (30, 60), "long": (60, 90), "extended": (90, 180)}
+        resume_min, resume_max = _DURATION_PRESETS_RESUME.get(metadata.get("clip_duration_preset", "medium"), (30, 60))
 
         job_id = await JobQueue.enqueue_processing_job(
             "process_video_task",
@@ -1040,6 +1055,8 @@ async def resume_task(
             None,  # music_path_str
             0.15,  # music_volume
             resume_target_clip_count,
+            resume_min,
+            resume_max,
         )
 
         return {"message": "Task resumed", "job_id": job_id}
