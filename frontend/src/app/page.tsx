@@ -119,6 +119,9 @@ export default function Home() {
   const [availableTemplates, setAvailableTemplates] = useState<Array<{ id: string, name: string, description: string, animation: string, font_family?: string, font_size?: number, font_color?: string }>>([]);
   const [includeBroll, setIncludeBroll] = useState(false);
 
+  // Clip count
+  const [targetClipCount, setTargetClipCount] = useState(10);
+
   // Music states
   const [backgroundMusicName, setBackgroundMusicName] = useState<string>("");
   const [musicVolume, setMusicVolume] = useState(15);
@@ -530,6 +533,7 @@ export default function Home() {
           filtered_words: normalizedFilteredWords,
           background_music_name: backgroundMusicName || null,
           music_volume: musicVolume,
+          target_clip_count: targetClipCount,
         }),
       });
 
@@ -974,6 +978,27 @@ export default function Home() {
                   <div className="flex items-center gap-2 text-sm font-medium text-stone-900">
                     <Sparkles className="w-4 h-4" />
                     Style & Captions
+                  </div>
+
+                  {/* Clip Count */}
+                  <div className="space-y-2">
+                    <label className="text-sm text-stone-600">
+                      Number of clips
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range"
+                        min={1}
+                        max={30}
+                        step={1}
+                        value={targetClipCount}
+                        onChange={(e) => setTargetClipCount(Number(e.target.value))}
+                        disabled={generationControlsDisabled}
+                        className="flex-1"
+                      />
+                      <span className="text-sm font-semibold text-stone-900 w-8 text-center">{targetClipCount}</span>
+                    </div>
+                    <p className="text-xs text-stone-500">AI will find up to {targetClipCount} viral moment{targetClipCount !== 1 ? "s" : ""}. For long videos (1h+) set 15–25.</p>
                   </div>
 
                   {/* Caption Template Selector */}

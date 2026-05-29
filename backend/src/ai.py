@@ -401,7 +401,10 @@ def get_transcript_agent() -> Agent[None, TranscriptAnalysis]:
 
 
 def build_transcript_analysis_prompt(
-    transcript: str, include_broll: bool = False, clip_signals: str | None = None
+    transcript: str,
+    include_broll: bool = False,
+    clip_signals: str | None = None,
+    target_clip_count: int = 5,
 ) -> str:
     """Build the grounded task prompt for transcript analysis."""
     broll_instruction = ""
@@ -418,6 +421,18 @@ def build_transcript_analysis_prompt(
             "must still be a coherent contiguous transcript range."
         )
 
+    # Scale the selection window around the target
+    target = max(1, target_clip_count)
+    low = max(1, target - max(1, target // 4))
+    high = target + max(1, target // 4)
+    if target <= 5:
+        count_instruction = f"Choose {low}-{high} segments total (aim for {target})."
+    else:
+        count_instruction = (
+            f"Choose as close to {target} segments as possible (at least {low}, no more than {high}). "
+            f"For long videos you MUST find this many distinct, high-quality moments — do not stop early."
+        )
+
     return f"""Analyze this video transcript and identify the most engaging segments for short-form content.
 
 The transcript is formatted as one line per timestamped span, for example:
@@ -431,7 +446,7 @@ Follow this workflow:
 4. For each chosen segment, use the earliest timestamp in the selected range as start_time and the latest timestamp in the selected range as end_time.{broll_instruction}
 
 Selection target:
-- Choose 2-5 segments total.
+- {count_instruction}
 - Most selected clips should be 25-50 seconds.
 - Only choose a 15-24 second clip when it already contains a full setup and payoff.
 - If a strong moment is shorter than 25 seconds, first try expanding to nearby contiguous transcript lines that add useful context.
@@ -610,7 +625,10 @@ def _repair_segment_bounds(
 
 
 async def get_most_relevant_parts_by_transcript(
-    transcript: str, include_broll: bool = False, clip_signals: str | None = None
+    transcript: str,
+    include_broll: bool = False,
+    clip_signals: str | None = None,
+    target_clip_count: int = 5,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript with virality scoring and optional B-roll detection."""
     logger.info(
@@ -625,6 +643,7 @@ async def get_most_relevant_parts_by_transcript(
                 transcript=transcript,
                 include_broll=include_broll,
                 clip_signals=clip_signals,
+                target_clip_count=target_clip_count,
             )
         )
 

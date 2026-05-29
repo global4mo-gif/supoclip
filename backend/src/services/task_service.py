@@ -154,6 +154,7 @@ class TaskService:
         cleanup_settings: Optional[Dict[str, Any]] = None,
         music_path: Optional[Path] = None,
         music_volume: float = 0.15,
+        target_clip_count: int = 5,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -221,6 +222,7 @@ class TaskService:
                 cached_analysis_json=cached_analysis_json,
                 progress_callback=update_progress,
                 should_cancel=should_cancel,
+                target_clip_count=target_clip_count,
             )
             stage_timings["pipeline_seconds"] = round(
                 perf_counter() - pipeline_start, 3
