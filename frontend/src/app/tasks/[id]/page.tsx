@@ -124,9 +124,9 @@ export default function TaskPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedClipIds, setSelectedClipIds] = useState<string[]>([]);
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
-  const [startOffset, setStartOffset] = useState("0");
-  const [endOffset, setEndOffset] = useState("0");
-  const [splitTime, setSplitTime] = useState("5");
+  // Per-clip editing state — keyed by clipId so values don't bleed between clips
+  const [clipEditState, setClipEditState] = useState<Record<string, { startOffset: string; endOffset: string; splitTime: string }>>({});
+  const [rerenderingClipId, setRerenderingClipId] = useState<string | null>(null);
   const [captionText, setCaptionText] = useState("");
   const [captionPosition, setCaptionPosition] = useState("bottom");
   const [highlightWords, setHighlightWords] = useState("");
@@ -527,13 +527,18 @@ export default function TaskPage() {
     });
   };
 
+  const getClipEdit = (clipId: string) =>
+    clipEditState[clipId] ?? { startOffset: "0", endOffset: "0", splitTime: "5" };
+
+  const setClipEditField = (clipId: string, field: "startOffset" | "endOffset" | "splitTime", value: string) =>
+    setClipEditState((prev) => ({ ...prev, [clipId]: { ...getClipEdit(clipId), [field]: value } }));
+
   const handleTrimClip = async (clipId: string) => {
     if (!session?.user?.id || !params.id) return;
+    const { startOffset, endOffset } = getClipEdit(clipId);
     const response = await fetch(`${taskApiUrl}/${params.id}/clips/${clipId}`, {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         start_offset: Number(startOffset || "0"),
         end_offset: Number(endOffset || "0"),
@@ -548,11 +553,10 @@ export default function TaskPage() {
 
   const handleSplitClip = async (clipId: string) => {
     if (!session?.user?.id || !params.id) return;
+    const { splitTime } = getClipEdit(clipId);
     const response = await fetch(`${taskApiUrl}/${params.id}/clips/${clipId}/split`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ split_time: Number(splitTime || "5") }),
     });
     if (!response.ok) {
@@ -560,6 +564,32 @@ export default function TaskPage() {
       return;
     }
     await fetchTaskStatus();
+  };
+
+  const handleRerenderClip = async (clipId: string) => {
+    if (!session?.user?.id || !params.id) return;
+    setRerenderingClipId(clipId);
+    try {
+      const response = await fetch(`${taskApiUrl}/${params.id}/clips/${clipId}/rerender`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          font_family: projectFontFamily,
+          font_size: Number(projectFontSize || "24"),
+          font_color: /^#[0-9A-Fa-f]{6}$/.test(projectFontColor) ? projectFontColor : "#FFFFFF",
+          caption_template: projectCaptionTemplate,
+          background_music_name: projectMusicName || null,
+          music_volume: projectMusicVolume,
+        }),
+      });
+      if (!response.ok) {
+        alert(await buildSupportError(response, "Failed to re-render clip"));
+        return;
+      }
+      await fetchTaskStatus();
+    } finally {
+      setRerenderingClipId(null);
+    }
   };
 
   const handleMergeClips = async () => {
@@ -1421,36 +1451,60 @@ export default function TaskPage() {
 
                       {editingClipId === clip.id && (
                         <div className="mt-4 p-3 border rounded-lg space-y-3 bg-gray-50">
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                            <Input
-                              value={startOffset}
-                              onChange={(e) => setStartOffset(e.target.value)}
-                              placeholder="Start trim (sec)"
-                            />
-                            <Input
-                              value={endOffset}
-                              onChange={(e) => setEndOffset(e.target.value)}
-                              placeholder="End trim (sec)"
-                            />
-                            <Button size="sm" onClick={() => handleTrimClip(clip.id)}>
-                              <Scissors className="w-4 h-4" />
-                              Trim
-                            </Button>
+                          {/* Trim */}
+                          <div>
+                            <p className="text-xs font-medium text-gray-500 mb-1.5">Trim (seconds to cut from start / end)</p>
+                            <div className="grid grid-cols-3 gap-2">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.1"
+                                value={getClipEdit(clip.id).startOffset}
+                                onChange={(e) => setClipEditField(clip.id, "startOffset", e.target.value)}
+                                placeholder="From start"
+                              />
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.1"
+                                value={getClipEdit(clip.id).endOffset}
+                                onChange={(e) => setClipEditField(clip.id, "endOffset", e.target.value)}
+                                placeholder="From end"
+                              />
+                              <Button size="sm" onClick={() => handleTrimClip(clip.id)}>
+                                <Scissors className="w-4 h-4 mr-1" />
+                                Trim
+                              </Button>
+                            </div>
                           </div>
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                            <Input
-                              value={splitTime}
-                              onChange={(e) => setSplitTime(e.target.value)}
-                              placeholder="Split at (sec)"
-                            />
-                            <Button size="sm" variant="outline" onClick={() => handleSplitClip(clip.id)}>
-                              <SplitSquareVertical className="w-4 h-4" />
-                              Split
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => handleTrimClip(clip.id)}>
-                              <RefreshCw className="w-4 h-4" />
-                              Regenerate
-                            </Button>
+
+                          {/* Split */}
+                          <div>
+                            <p className="text-xs font-medium text-gray-500 mb-1.5">Split at second</p>
+                            <div className="grid grid-cols-3 gap-2">
+                              <Input
+                                type="number"
+                                min="0"
+                                step="0.1"
+                                value={getClipEdit(clip.id).splitTime}
+                                onChange={(e) => setClipEditField(clip.id, "splitTime", e.target.value)}
+                                placeholder="Split at (sec)"
+                              />
+                              <Button size="sm" variant="outline" onClick={() => handleSplitClip(clip.id)}>
+                                <SplitSquareVertical className="w-4 h-4 mr-1" />
+                                Split
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={rerenderingClipId === clip.id}
+                                onClick={() => handleRerenderClip(clip.id)}
+                                title="Re-render with current font, subtitle style and music settings"
+                              >
+                                <RefreshCw className={`w-4 h-4 mr-1 ${rerenderingClipId === clip.id ? "animate-spin" : ""}`} />
+                                {rerenderingClipId === clip.id ? "Rendering…" : "Re-render"}
+                              </Button>
+                            </div>
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                             <Input

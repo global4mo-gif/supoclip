@@ -701,6 +701,64 @@ async def regenerate_clip(
         )
 
 
+@router.post("/{task_id}/clips/{clip_id}/rerender")
+async def rerender_single_clip(
+    task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Re-render one clip with (optionally overridden) style settings.
+
+    Accepts the same font/caption/music fields as the /settings endpoint.
+    Any field omitted falls back to the task's stored settings.
+    """
+    try:
+        payload = await request.json()
+        font_family = _normalize_font_family(payload["font_family"]) if "font_family" in payload else None
+        font_size = _normalize_font_size(payload["font_size"]) if "font_size" in payload else None
+        font_color = _normalize_font_color(payload["font_color"]) if "font_color" in payload else None
+        caption_template = payload.get("caption_template") or None
+        background_music_name = payload.get("background_music_name") or None
+        try:
+            music_volume = max(0.0, min(1.0, float(payload.get("music_volume", 15)) / 100.0))
+        except (TypeError, ValueError):
+            music_volume = 0.15
+
+        task_service = TaskService(db)
+        await _require_task_owner(request, task_service, db, task_id)
+        task_record = await task_service.task_repo.get_task_by_id(db, task_id)
+        if not task_record:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if font_family and not is_font_accessible(font_family, task_record["user_id"]):
+            raise HTTPException(status_code=400, detail="Selected font is not available")
+        if background_music_name and not is_music_accessible(background_music_name, task_record["user_id"]):
+            raise HTTPException(status_code=400, detail="Selected music track is not available")
+
+        music_path = (
+            find_music_path(background_music_name, user_id=task_record["user_id"], allow_all_user_music=True)
+            if background_music_name
+            else None
+        )
+
+        updated_clip = await task_service.rerender_single_clip(
+            task_id,
+            clip_id,
+            font_family=font_family,
+            font_size=font_size,
+            font_color=font_color,
+            caption_template=caption_template,
+            music_path=music_path,
+            music_volume=music_volume,
+        )
+        return {"clip": updated_clip, "message": "Clip re-rendered successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error re-rendering clip %s: %s", clip_id, e)
+        raise HTTPException(status_code=500, detail=f"Error re-rendering clip: {str(e)}")
+
+
 @router.post("/{task_id}/settings")
 async def apply_task_settings(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)
