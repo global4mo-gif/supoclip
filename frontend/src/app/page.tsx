@@ -18,7 +18,7 @@ import { track } from "@/lib/datafast";
 import { formatSupportMessage, parseApiError } from "@/lib/api-error";
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Film, Sparkles, Upload, Monitor, Menu, X, LogOut, List, Shield, Settings } from "lucide-react";
+import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Film, Sparkles, Upload, Monitor, Menu, X, LogOut, List, Shield, Settings, Music } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import LandingPage from "@/components/landing-page";
 import { isLandingOnlyModeEnabled } from "@/lib/app-flags";
@@ -118,6 +118,17 @@ export default function Home() {
   const [captionTemplate, setCaptionTemplate] = useState("default");
   const [availableTemplates, setAvailableTemplates] = useState<Array<{ id: string, name: string, description: string, animation: string, font_family?: string, font_size?: number, font_color?: string }>>([]);
   const [includeBroll, setIncludeBroll] = useState(false);
+
+  // Clip count & duration
+  const [targetClipCount, setTargetClipCount] = useState(10);
+  const [clipDurationPreset, setClipDurationPreset] = useState("medium");
+
+  // Music states
+  const [backgroundMusicName, setBackgroundMusicName] = useState<string>("");
+  const [musicVolume, setMusicVolume] = useState(15);
+  const [availableMusic, setAvailableMusic] = useState<Array<{ name: string; display_name: string; format: string }>>([]);
+  const [isUploadingMusic, setIsUploadingMusic] = useState(false);
+  const musicUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [brollAvailable, setBrollAvailable] = useState(false);
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("vertical");
   const [addSubtitles, setAddSubtitles] = useState(true);
@@ -362,6 +373,53 @@ export default function Home() {
     return font.display_name.toLowerCase().includes(keyword) || font.name.toLowerCase().includes(keyword);
   });
 
+  const refreshMusic = useCallback(async () => {
+    try {
+      const response = await fetch("/api/music", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = await response.json();
+      setAvailableMusic(data.music || []);
+    } catch {
+      // silently ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshMusic();
+  }, [refreshMusic]);
+
+  const handleMusicUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    const ext = file.name.toLowerCase().split(".").pop() || "";
+    if (!["mp3", "wav", "m4a", "aac", "ogg", "flac"].includes(ext)) {
+      setError("Supported formats: MP3, WAV, M4A, AAC, OGG, FLAC");
+      return;
+    }
+
+    try {
+      setIsUploadingMusic(true);
+      setError(null);
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await fetch("/api/music/upload", { method: "POST", body: formData });
+      if (!response.ok) {
+        const parsed = await parseApiError(response, "Failed to upload music");
+        setError(formatSupportMessage(parsed));
+        return;
+      }
+      const data = await response.json();
+      if (data?.music?.name) setBackgroundMusicName(data.music.name);
+      await refreshMusic();
+    } catch {
+      setError("Failed to upload music. Please try again.");
+    } finally {
+      setIsUploadingMusic(false);
+    }
+  };
+
   const canUploadCustomFonts =
     !billingSummary?.monetization_enabled ||
     (isPaidBillingPlan(billingSummary.plan) && ["active", "trialing"].includes(billingSummary.subscription_status));
@@ -474,6 +532,10 @@ export default function Home() {
           pause_threshold_ms: normalizedPauseThreshold,
           remove_filler_words: removeFillerWords,
           filtered_words: normalizedFilteredWords,
+          background_music_name: backgroundMusicName || null,
+          music_volume: musicVolume,
+          target_clip_count: targetClipCount,
+          clip_duration_preset: clipDurationPreset,
         }),
       });
 
@@ -920,6 +982,55 @@ export default function Home() {
                     Style & Captions
                   </div>
 
+                  {/* Clip Count */}
+                  <div className="space-y-2">
+                    <label className="text-sm text-stone-600">
+                      Number of clips
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="range"
+                        min={1}
+                        max={30}
+                        step={1}
+                        value={targetClipCount}
+                        onChange={(e) => setTargetClipCount(Number(e.target.value))}
+                        disabled={generationControlsDisabled}
+                        className="flex-1"
+                      />
+                      <span className="text-sm font-semibold text-stone-900 w-8 text-center">{targetClipCount}</span>
+                    </div>
+                    <p className="text-xs text-stone-500">AI will find up to {targetClipCount} viral moment{targetClipCount !== 1 ? "s" : ""}. For long videos (1h+) set 15–25.</p>
+                  </div>
+
+                  {/* Clip Duration Preset */}
+                  <div className="space-y-2">
+                    <label className="text-sm text-stone-600">Clip duration</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { id: "short",    label: "Short",    sub: "up to 30s" },
+                        { id: "medium",   label: "Medium",   sub: "30–60s" },
+                        { id: "long",     label: "Long",     sub: "60–90s" },
+                        { id: "extended", label: "Extended", sub: "90s+" },
+                      ].map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          disabled={generationControlsDisabled}
+                          onClick={() => setClipDurationPreset(p.id)}
+                          className={`rounded-lg border px-3 py-2 text-left transition-colors ${
+                            clipDurationPreset === p.id
+                              ? "border-stone-900 bg-stone-900 text-white"
+                              : "border-stone-200 bg-white text-stone-700 hover:border-stone-400"
+                          }`}
+                        >
+                          <div className="text-sm font-medium">{p.label}</div>
+                          <div className={`text-xs ${clipDurationPreset === p.id ? "text-stone-300" : "text-stone-500"}`}>{p.sub}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* Caption Template Selector */}
                   <div className="space-y-2">
                     <label className="text-sm text-stone-600">
@@ -1058,6 +1169,64 @@ export default function Home() {
                         disabled={generationControlsDisabled}
                         placeholder="basically, literally, to be honest"
                       />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Background Music Section */}
+              <Card className="border-stone-200">
+                <CardContent className="px-4 pt-3 pb-3 space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-medium text-stone-900">
+                    <Music className="w-4 h-4" />
+                    Background Music
+                  </div>
+                  <div className="space-y-2">
+                    <select
+                      className="w-full text-sm border border-stone-200 rounded-md px-2 py-1.5 bg-white"
+                      value={backgroundMusicName}
+                      onChange={(e) => setBackgroundMusicName(e.target.value)}
+                      disabled={generationControlsDisabled}
+                    >
+                      <option value="">No music</option>
+                      {availableMusic.map((track) => (
+                        <option key={track.name} value={track.name}>
+                          {track.display_name}
+                        </option>
+                      ))}
+                    </select>
+                    {backgroundMusicName && (
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-stone-500">Volume: {musicVolume}%</label>
+                        <input
+                          type="range"
+                          min={1}
+                          max={50}
+                          value={musicVolume}
+                          onChange={(e) => setMusicVolume(Number(e.target.value))}
+                          disabled={generationControlsDisabled}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+                    <div>
+                      <input
+                        ref={musicUploadInputRef}
+                        type="file"
+                        accept=".mp3,.wav,.m4a,.aac,.ogg,.flac"
+                        className="hidden"
+                        onChange={handleMusicUpload}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-xs w-full"
+                        onClick={() => musicUploadInputRef.current?.click()}
+                        disabled={generationControlsDisabled || isUploadingMusic}
+                      >
+                        {isUploadingMusic ? "Uploading..." : "Upload music track"}
+                      </Button>
                     </div>
                   </div>
                 </CardContent>

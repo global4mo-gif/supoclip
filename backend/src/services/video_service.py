@@ -113,15 +113,24 @@ class VideoService:
         return transcript
 
     @staticmethod
-    async def analyze_transcript(transcript: str, clip_signals: Optional[str] = None) -> Any:
+    async def analyze_transcript(
+        transcript: str,
+        clip_signals: Optional[str] = None,
+        target_clip_count: int = 5,
+        min_clip_seconds: int = 15,
+        max_clip_seconds: int = 60,
+    ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
         This is already async, no need to wrap.
         """
-        logger.info("Starting AI analysis of transcript")
+        logger.info(f"Starting AI analysis of transcript (target_clip_count={target_clip_count})")
         relevant_parts = await get_most_relevant_parts_by_transcript(
             transcript,
             clip_signals=clip_signals,
+            target_clip_count=target_clip_count,
+            min_clip_seconds=min_clip_seconds,
+            max_clip_seconds=max_clip_seconds,
         )
         logger.info(
             f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found"
@@ -139,6 +148,8 @@ class VideoService:
         output_format: str = "vertical",
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> List[Dict[str, Any]]:
         """
         Create standalone video clips from segments with optional subtitles.
@@ -162,6 +173,8 @@ class VideoService:
             output_format,
             add_subtitles,
             cleanup_settings,
+            music_path,
+            music_volume,
         )
 
         logger.info(f"Successfully created {len(clips_info)} clips")
@@ -180,6 +193,8 @@ class VideoService:
         output_format: str = "vertical",
         add_subtitles: bool = True,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> Optional[Dict[str, Any]]:
         """Render a single clip in the thread pool and return clip_info dict, or None on failure."""
         try:
@@ -240,6 +255,8 @@ class VideoService:
                 caption_template,
                 output_format,
                 keep_ranges,
+                music_path,
+                music_volume,
             )
 
             if not success:
@@ -316,6 +333,9 @@ class VideoService:
         cached_analysis_json: Optional[str] = None,
         progress_callback: Optional[Callable[[int, str, str], Awaitable[None]]] = None,
         should_cancel: Optional[Callable[[], Awaitable[bool]]] = None,
+        target_clip_count: int = 5,
+        min_clip_seconds: int = 15,
+        max_clip_seconds: int = 60,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
@@ -425,6 +445,9 @@ class VideoService:
                 relevant_parts = await VideoService.analyze_transcript(
                     transcript,
                     clip_signals=clip_signals,
+                    target_clip_count=target_clip_count,
+                    min_clip_seconds=min_clip_seconds,
+                    max_clip_seconds=max_clip_seconds,
                 )
 
             # Step 4: Create clips

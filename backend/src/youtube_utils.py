@@ -6,7 +6,9 @@ Optimized for free yt-dlp downloads with optional Apify fallback.
 import asyncio
 from datetime import datetime
 import logging
+import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -26,6 +28,15 @@ YOUTUBE_METADATA_PROVIDER_DATA_API = "youtube_data_api"
 YOUTUBE_DOWNLOAD_PROVIDER_YTDLP = "yt_dlp"
 YOUTUBE_DOWNLOAD_PROVIDER_APIFY = "apify"
 YOUTUBE_DATA_API_URL = "https://www.googleapis.com/youtube/v3/videos"
+FFMPEG_BINARY = os.getenv("FFMPEG_BINARY", "ffmpeg")
+FFPROBE_BINARY = os.getenv("FFPROBE_BINARY", "ffprobe")
+
+
+def _ffmpeg_location() -> Optional[str]:
+    ffmpeg_path = shutil.which(FFMPEG_BINARY) if "/" not in FFMPEG_BINARY else FFMPEG_BINARY
+    if not ffmpeg_path:
+        return None
+    return str(Path(ffmpeg_path).parent)
 
 
 class YouTubeDownloader:
@@ -44,8 +55,9 @@ class YouTubeDownloader:
 
         opts = {
             "outtmpl": str(output_path),
-            # Use best available video/audio to avoid quality caps from container constraints.
-            "format": "bestvideo*+bestaudio/best",
+            # Prefer a progressive MP4 with audio included. This avoids a
+            # large local merge step that can fail on small disks.
+            "format": "best[ext=mp4][vcodec!=none][acodec!=none][height<=1080]/best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]",
             "format_sort": ["res", "fps"],
             "merge_output_format": "mp4",
             "writesubtitles": False,
@@ -77,6 +89,10 @@ class YouTubeDownloader:
             "prefer_insecure": False,
             "age_limit": None,
         }
+
+        ffmpeg_location = _ffmpeg_location()
+        if ffmpeg_location:
+            opts["ffmpeg_location"] = ffmpeg_location
 
         return opts
 
@@ -175,7 +191,7 @@ def _get_local_video_dimensions(path: Path) -> tuple[int, int]:
     """Return local video width/height using ffprobe."""
     try:
         command = [
-            "ffprobe",
+            FFPROBE_BINARY,
             "-v",
             "error",
             "-select_streams",

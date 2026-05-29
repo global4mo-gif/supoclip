@@ -23,6 +23,15 @@ from ...font_registry import (
     get_user_fonts_dir,
     sanitize_font_stem,
 )
+from ...music_registry import (
+    SUPPORTED_MUSIC_EXTENSIONS,
+    MAX_MUSIC_UPLOAD_BYTES,
+    build_user_music_stem,
+    find_music_path,
+    get_available_music as list_available_music,
+    get_user_music_dir,
+    sanitize_music_stem,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 
@@ -242,6 +251,74 @@ async def get_broll_status():
         "configured": bool(config.pexels_api_key),
         "provider": "pexels" if config.pexels_api_key else None,
     }
+
+
+@router.get("/music")
+async def get_available_music_route(request: Request):
+    """Get list of available music tracks."""
+    try:
+        user_id = _get_authenticated_user_id(request)
+        tracks = list_available_music(user_id)
+        return {"music": tracks}
+    except Exception as e:
+        logger.error(f"Error loading music: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load music tracks")
+
+
+@router.get("/music/{music_name}")
+async def get_music_file(music_name: str, request: Request):
+    """Serve a music file by name."""
+    try:
+        user_id = _get_authenticated_user_id(request)
+        music_path = find_music_path(music_name, user_id=user_id, allow_all_user_music=True)
+        if not music_path or not music_path.exists():
+            raise HTTPException(status_code=404, detail="Music track not found")
+        return FileResponse(str(music_path), media_type="audio/mpeg")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error serving music file: {e}")
+        raise HTTPException(status_code=500, detail="Failed to serve music file")
+
+
+@router.post("/music/upload")
+async def upload_music(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a music file for use as background music in clips."""
+    try:
+        user_id = _get_authenticated_user_id(request)
+
+        filename = file.filename or "track.mp3"
+        ext = Path(filename).suffix.lower()
+        if ext not in SUPPORTED_MUSIC_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported format. Allowed: {', '.join(SUPPORTED_MUSIC_EXTENSIONS)}",
+            )
+
+        music_stem = build_user_music_stem(user_id, sanitize_music_stem(filename))
+        user_dir = get_user_music_dir(user_id)
+        user_dir.mkdir(parents=True, exist_ok=True)
+        target_path = user_dir / f"{music_stem}{ext}"
+
+        await _write_upload_to_disk(file, target_path, MAX_MUSIC_UPLOAD_BYTES)
+
+        return {
+            "music": {
+                "name": music_stem,
+                "display_name": Path(filename).stem,
+                "filename": target_path.name,
+                "format": ext.lstrip("."),
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading music: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload music file")
 
 
 @router.post("/upload")

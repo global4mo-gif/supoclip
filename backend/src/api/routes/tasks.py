@@ -22,6 +22,7 @@ from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import get_config
 from ...font_registry import is_font_accessible
+from ...music_registry import find_music_path, is_music_accessible
 from ...clip_cleanup import normalize_clip_cleanup_settings
 from ...video_utils import VALID_OUTPUT_FORMATS
 from ...admin_auth import require_admin_user
@@ -111,6 +112,8 @@ def _merge_task_source_metadata(
     output_format: Any = None,
     add_subtitles: Any = None,
     cleanup_settings: Dict[str, Any] | None = None,
+    target_clip_count: int | None = None,
+    clip_duration_preset: str | None = None,
 ) -> Dict[str, Any]:
     merged = dict(existing or {})
 
@@ -124,6 +127,10 @@ def _merge_task_source_metadata(
         merged["add_subtitles"] = add_subtitles
     if cleanup_settings:
         merged.update(cleanup_settings)
+    if target_clip_count is not None:
+        merged["target_clip_count"] = target_clip_count
+    if clip_duration_preset is not None:
+        merged["clip_duration_preset"] = clip_duration_preset
 
     return merged
 
@@ -202,6 +209,25 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         data.get("remove_filler_words"),
         data.get("filtered_words"),
     )
+    background_music_name = data.get("background_music_name") or None
+    music_volume_raw = data.get("music_volume", 15)
+    try:
+        music_volume = max(0.0, min(1.0, float(music_volume_raw) / 100.0))
+    except (TypeError, ValueError):
+        music_volume = 0.15
+    try:
+        target_clip_count = max(1, min(30, int(data.get("target_clip_count", 5))))
+    except (TypeError, ValueError):
+        target_clip_count = 5
+
+    _DURATION_PRESETS = {
+        "short":    (15, 30),
+        "medium":   (30, 60),
+        "long":     (60, 90),
+        "extended": (90, 180),
+    }
+    preset = data.get("clip_duration_preset", "medium")
+    min_clip_seconds, max_clip_seconds = _DURATION_PRESETS.get(preset, (30, 60))
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
 
@@ -210,6 +236,15 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         await billing_service.assert_can_create_task(user_id)
 
         task_service = TaskService(db)
+
+        if background_music_name and not is_music_accessible(background_music_name, user_id):
+            raise HTTPException(status_code=400, detail="Selected music track is not available")
+
+        music_path = (
+            find_music_path(background_music_name, user_id=user_id, allow_all_user_music=True)
+            if background_music_name
+            else None
+        )
 
         # Create task
         task_id = await task_service.create_task_with_source(
@@ -246,6 +281,11 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             output_format,
             add_subtitles,
             cleanup_settings,
+            str(music_path) if music_path else None,
+            music_volume,
+            target_clip_count,
+            min_clip_seconds,
+            max_clip_seconds,
         )
 
         # Save source metadata for resume/retries in environments without sources.url column
@@ -258,6 +298,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 output_format=output_format,
                 add_subtitles=add_subtitles,
                 cleanup_settings=cleanup_settings,
+                target_clip_count=target_clip_count,
+                clip_duration_preset=preset,
             ),
         )
 
@@ -683,6 +725,64 @@ async def regenerate_clip(
         )
 
 
+@router.post("/{task_id}/clips/{clip_id}/rerender")
+async def rerender_single_clip(
+    task_id: str, clip_id: str, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Re-render one clip with (optionally overridden) style settings.
+
+    Accepts the same font/caption/music fields as the /settings endpoint.
+    Any field omitted falls back to the task's stored settings.
+    """
+    try:
+        payload = await request.json()
+        font_family = _normalize_font_family(payload["font_family"]) if "font_family" in payload else None
+        font_size = _normalize_font_size(payload["font_size"]) if "font_size" in payload else None
+        font_color = _normalize_font_color(payload["font_color"]) if "font_color" in payload else None
+        caption_template = payload.get("caption_template") or None
+        background_music_name = payload.get("background_music_name") or None
+        try:
+            music_volume = max(0.0, min(1.0, float(payload.get("music_volume", 15)) / 100.0))
+        except (TypeError, ValueError):
+            music_volume = 0.15
+
+        task_service = TaskService(db)
+        await _require_task_owner(request, task_service, db, task_id)
+        task_record = await task_service.task_repo.get_task_by_id(db, task_id)
+        if not task_record:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if font_family and not is_font_accessible(font_family, task_record["user_id"]):
+            raise HTTPException(status_code=400, detail="Selected font is not available")
+        if background_music_name and not is_music_accessible(background_music_name, task_record["user_id"]):
+            raise HTTPException(status_code=400, detail="Selected music track is not available")
+
+        music_path = (
+            find_music_path(background_music_name, user_id=task_record["user_id"], allow_all_user_music=True)
+            if background_music_name
+            else None
+        )
+
+        updated_clip = await task_service.rerender_single_clip(
+            task_id,
+            clip_id,
+            font_family=font_family,
+            font_size=font_size,
+            font_color=font_color,
+            caption_template=caption_template,
+            music_path=music_path,
+            music_volume=music_volume,
+        )
+        return {"clip": updated_clip, "message": "Clip re-rendered successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error re-rendering clip %s: %s", clip_id, e)
+        raise HTTPException(status_code=500, detail=f"Error re-rendering clip: {str(e)}")
+
+
 @router.post("/{task_id}/settings")
 async def apply_task_settings(
     task_id: str, request: Request, db: AsyncSession = Depends(get_db)
@@ -705,6 +805,12 @@ async def apply_task_settings(
             payload.get("filtered_words"),
         )
 
+        background_music_name = payload.get("background_music_name") or None
+        try:
+            music_volume = max(0.0, min(1.0, float(payload.get("music_volume", 15)) / 100.0))
+        except (TypeError, ValueError):
+            music_volume = 0.15
+
         task_service = TaskService(db)
         await _require_task_owner(request, task_service, db, task_id)
         task_record = await task_service.task_repo.get_task_by_id(db, task_id)
@@ -714,6 +820,15 @@ async def apply_task_settings(
             raise HTTPException(
                 status_code=400, detail="Selected font is not available"
             )
+        if background_music_name and not is_music_accessible(background_music_name, task_record["user_id"]):
+            raise HTTPException(status_code=400, detail="Selected music track is not available")
+
+        music_path = (
+            find_music_path(background_music_name, user_id=task_record["user_id"], allow_all_user_music=True)
+            if background_music_name
+            else None
+        )
+
         task = await task_service.update_task_settings(
             task_id,
             font_family,
@@ -723,6 +838,8 @@ async def apply_task_settings(
             include_broll,
             apply_to_existing,
             cleanup_settings,
+            music_path,
+            music_volume,
         )
         metadata = await _load_task_source_metadata(task_id)
         await _save_task_source_metadata(
@@ -916,6 +1033,10 @@ async def resume_task(
             task.get("processing_mode") or runtime_config.default_processing_mode
         )
 
+        resume_target_clip_count = max(1, min(30, int(metadata.get("target_clip_count", 5))))
+        _DURATION_PRESETS_RESUME = {"short": (15, 30), "medium": (30, 60), "long": (60, 90), "extended": (90, 180)}
+        resume_min, resume_max = _DURATION_PRESETS_RESUME.get(metadata.get("clip_duration_preset", "medium"), (30, 60))
+
         job_id = await JobQueue.enqueue_processing_job(
             "process_video_task",
             processing_mode,
@@ -931,6 +1052,11 @@ async def resume_task(
             output_format,
             add_subtitles,
             cleanup_settings,
+            None,  # music_path_str
+            0.15,  # music_volume
+            resume_target_clip_count,
+            resume_min,
+            resume_max,
         )
 
         return {"message": "Task resumed", "job_id": job_id}

@@ -152,6 +152,11 @@ class TaskService:
         should_cancel: Optional[Callable] = None,
         clip_ready_callback: Optional[Callable] = None,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
+        target_clip_count: int = 5,
+        min_clip_seconds: int = 15,
+        max_clip_seconds: int = 60,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -219,6 +224,9 @@ class TaskService:
                 cached_analysis_json=cached_analysis_json,
                 progress_callback=update_progress,
                 should_cancel=should_cancel,
+                target_clip_count=target_clip_count,
+                min_clip_seconds=min_clip_seconds,
+                max_clip_seconds=max_clip_seconds,
             )
             stage_timings["pipeline_seconds"] = round(
                 perf_counter() - pipeline_start, 3
@@ -287,6 +295,8 @@ class TaskService:
                     output_format,
                     add_subtitles,
                     normalized_cleanup_settings,
+                    music_path,
+                    music_volume,
                 )
                 if clip_info is None:
                     continue  # Skip failed clip
@@ -519,6 +529,8 @@ class TaskService:
         include_broll: bool,
         apply_to_existing: bool,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> Dict[str, Any]:
         """Update task-level settings and optionally regenerate all clips."""
         await self.task_repo.update_task_settings(
@@ -539,6 +551,8 @@ class TaskService:
                 font_color,
                 caption_template,
                 cleanup_settings=cleanup_settings,
+                music_path=music_path,
+                music_volume=music_volume,
             )
 
         return await self.get_task_with_clips(task_id) or {}
@@ -551,6 +565,8 @@ class TaskService:
         font_color: str,
         caption_template: str,
         cleanup_settings: Optional[Dict[str, Any]] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
     ) -> None:
         """Regenerate all clips in a task using existing segment boundaries."""
         task = await self.task_repo.get_task_by_id(self.db, task_id)
@@ -646,6 +662,8 @@ class TaskService:
             output_format,
             add_subtitles,
             normalized_cleanup_settings,
+            music_path,
+            music_volume,
         )
 
         await self.clip_repo.delete_clips_by_task(self.db, task_id)
@@ -675,6 +693,112 @@ class TaskService:
             clip_ids.append(clip_id)
 
         await self.task_repo.update_task_clips(self.db, task_id, clip_ids)
+
+    async def rerender_single_clip(
+        self,
+        task_id: str,
+        clip_id: str,
+        font_family: Optional[str] = None,
+        font_size: Optional[int] = None,
+        font_color: Optional[str] = None,
+        caption_template: Optional[str] = None,
+        music_path: Optional[Path] = None,
+        music_volume: float = 0.15,
+    ) -> Dict[str, Any]:
+        """Re-render one clip with the given (or task-default) style settings."""
+        task = await self.task_repo.get_task_by_id(self.db, task_id)
+        if not task:
+            raise ValueError("Task not found")
+        clip = await self.clip_repo.get_clip_by_id(self.db, clip_id)
+        if not clip or clip["task_id"] != task_id:
+            raise ValueError("Clip not found")
+
+        # Fall back to task-level settings when not overridden
+        eff_font_family = font_family or task.get("font_family") or "TikTokSans-Regular"
+        eff_font_size = font_size or task.get("font_size") or 24
+        eff_font_color = font_color or task.get("font_color") or "#FFFFFF"
+        eff_caption_template = caption_template or task.get("caption_template") or "default"
+
+        source_url = task.get("source_url")
+        source_type = task.get("source_type")
+        if not source_url or not source_type:
+            raise ValueError("Task source URL is missing")
+
+        metadata = await self._load_task_source_settings(task_id)
+        output_format = metadata.get("output_format", "vertical")
+        add_subtitles = metadata.get("add_subtitles", True)
+
+        if source_type == "youtube":
+            downloaded = await self.video_service.download_video(source_url)
+            if not downloaded:
+                raise ValueError("Failed to download source video")
+            video_path = Path(downloaded)
+        else:
+            video_path = self.video_service.resolve_local_video_path(source_url)
+            if not video_path.exists():
+                raise ValueError("Source video file no longer exists")
+
+        keep_ranges = self._get_clip_source_ranges(clip)
+        if not keep_ranges:
+            start_s = parse_timestamp_to_seconds(clip.get("start_time", "0:00"))
+            end_s = parse_timestamp_to_seconds(clip.get("end_time", "0:00"))
+            keep_ranges = [(start_s, end_s)] if end_s > start_s else None
+
+        bounds = source_range_bounds(keep_ranges) if keep_ranges else None
+        start_seconds = bounds[0] if bounds else 0.0
+        end_seconds = bounds[1] if bounds else 0.0
+
+        clips_dir = Path(self.config.temp_dir) / "clips"
+        clips_dir.mkdir(parents=True, exist_ok=True)
+
+        segment = {
+            "start_time": self._seconds_to_mmss(start_seconds),
+            "end_time": self._seconds_to_mmss(end_seconds),
+            "keep_ranges": keep_ranges,
+            "text": clip.get("text") or "",
+            "relevance_score": clip.get("relevance_score", 0.5),
+            "reasoning": "Rerendered with updated settings",
+            "virality_score": clip.get("virality_score", 0),
+            "hook_score": clip.get("hook_score", 0),
+            "engagement_score": clip.get("engagement_score", 0),
+            "value_score": clip.get("value_score", 0),
+            "shareability_score": clip.get("shareability_score", 0),
+        }
+
+        clip_index = (clip.get("clip_order") or 1) - 1
+        clip_info = await self.video_service.create_single_clip(
+            video_path,
+            segment,
+            clip_index,
+            clips_dir,
+            eff_font_family,
+            eff_font_size,
+            eff_font_color,
+            eff_caption_template,
+            output_format,
+            add_subtitles,
+            None,  # no cleanup settings for single re-render
+            music_path,
+            music_volume,
+        )
+        if not clip_info:
+            raise ValueError("Failed to render clip")
+
+        bounds2 = source_range_bounds(keep_ranges) if keep_ranges else None
+        duration = clip_info.get("duration") or max(0.1, total_source_duration(keep_ranges) if keep_ranges else 0.1)
+        save_clip_source_ranges(Path(clip_info["path"]), keep_ranges or [])
+
+        await self.clip_repo.update_clip(
+            self.db,
+            clip_id,
+            clip_info["filename"],
+            clip_info["path"],
+            self._seconds_to_mmss(bounds2[0]) if bounds2 else clip.get("start_time", "0:00"),
+            self._seconds_to_mmss(bounds2[1]) if bounds2 else clip.get("end_time", "0:00"),
+            duration,
+            clip.get("text") or "",
+        )
+        return (await self.clip_repo.get_clip_by_id(self.db, clip_id)) or {}
 
     async def trim_clip(
         self,
